@@ -28,6 +28,36 @@ try:
 except:
 	pass
 
+conf_path = '/etc/wndchrm/wndchrm-queue.conf'
+def read_config():
+	global conf_path
+	config = ConfigParser.SafeConfigParser()
+	config.readfp(io.BytesIO('[conf]\n'+open(conf_path, 'r').read()))
+	conf = {
+		'wndchrm_executable'    : None,
+		'num_workers'           : None,
+		'beanstalkd_host'       : None,
+		'beanstalkd_port'       : None,
+		'beanstalkd_tube'       : None,
+		'beanstalkd_wait_retry' : None,
+		'beanstalkd_retries'    : None,
+		'worker_PID_dir'        : None,
+		'worker_log'            : None,
+		}
+	conf_ints = {
+		'num_workers'           : None,
+		'beanstalkd_port'       : None,
+		'beanstalkd_wait_retry' : None,
+		'beanstalkd_retries'    : None,
+		}
+	for k in conf.keys():
+		if (k in conf_ints):
+			conf[k] = int (config.get("conf", k))
+		else:
+			conf[k] = config.get("conf", k)
+	return conf
+
+
 def add_job_deps (job, job_dep_tube):
 	ndeps = 0
 	old_tube = beanstalk.using()
