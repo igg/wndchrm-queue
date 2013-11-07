@@ -29,81 +29,108 @@ except:
 	pass
 
 conf_path = '/etc/wndchrm/wndchrm-queue.conf'
-def read_config():
-	global conf_path
-	config = ConfigParser.SafeConfigParser()
-	config.readfp(io.BytesIO('[conf]\n'+open(conf_path, 'r').read()))
-	conf = {
-		'wndchrm_executable'    : None,
-		'num_workers'           : None,
-		'beanstalkd_host'       : None,
-		'beanstalkd_port'       : None,
-		'beanstalkd_tube'       : None,
-		'beanstalkd_wait_retry' : None,
-		'beanstalkd_retries'    : None,
-		'worker_PID_dir'        : None,
-		'worker_log'            : None,
-		}
-	conf_ints = {
-		'num_workers'           : None,
-		'beanstalkd_port'       : None,
-		'beanstalkd_wait_retry' : None,
-		'beanstalkd_retries'    : None,
-		}
-	for k in conf.keys():
-		if (k in conf_ints):
-			conf[k] = int (config.get("conf", k))
+
+class DepQueue (object):
+	def __init__(self, **kwargs):
+		self.conf = None
+		read_config (self)
+
+		self.beanstalk = None
+		connect (self)
+
+		self.add_job_deps_callback = None
+		if 'add_job_deps_callback' not in kwargs:
+			raise ValueError("The add_job_deps_callback must be used to specify a function to add job dependencies")
 		else:
-			conf[k] = config.get("conf", k)
-	return conf
+			self.add_job_deps_callback = kwargs['add_job_deps_callback']
+
+		self.run_job_callback = None
+		if 'run_job_callback' not in kwargs:
+			raise ValueError("The run_job_callback must be used to specify a function to run jobs")
+		else:
+			self.run_job_callback = kwargs['run_job_callback']
+
+	def connect (self):
+		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
+
+	def read_config(self):
+		global conf_path
+		config = ConfigParser.SafeConfigParser()
+		config.readfp(io.BytesIO('[conf]\n'+open(conf_path, 'r').read()))
+		self.conf = {
+			'wndchrm_executable'    : None,
+			'num_workers'           : None,
+			'beanstalkd_host'       : None,
+			'beanstalkd_port'       : None,
+			'beanstalkd_tube'       : None,
+			'beanstalkd_wait_retry' : None,
+			'beanstalkd_retries'    : None,
+			'worker_PID_dir'        : None,
+			'worker_log'            : None,
+			}
+		conf_ints = {
+			'num_workers'           : None,
+			'beanstalkd_port'       : None,
+			'beanstalkd_wait_retry' : None,
+			'beanstalkd_retries'    : None,
+			}
+		for k in self.conf.keys():
+			if (k in conf_ints):
+				self.conf[k] = int (config.get("conf", k))
+			else:
+				self.conf[k] = config.get("conf", k)
 
 
-def add_job_deps (job, job_dep_tube):
-	ndeps = 0
-	old_tube = beanstalk.using()
+	def add_job_deps (self, job, job_dep_tube):
+		ndeps = 0
+		old_tube = self.beanstalk.using()
 	
-	beanstalk.use (job_dep_tube)
-	# ...
-	# beanstalk.put (dep_job)
-	# ndeps += 1
-	beanstalk.use (old_tube)
-	return ndeps
+		self.beanstalk.use (job_dep_tube)
+		ndeps = self.add_job_deps_callback (job)
+		# ...
+		# beanstalk.put (dep_job)
+		# ndeps += 1
+		# ...
+		self.beanstalk.use (old_tube)
+		return ndeps
 
-def run_job (job):
-	# ...
-	job.delete()
+	def run_job (self, job):
+		# ...
+		self.run_job_callback (job)
+		job.delete()
 
-job = beanstalk.reserve()
-job_tube = job.stats()['tube']
-if (job_tube == deps_tube):
-	(job_id, job_dep_tube) = job.body.split("\t")
-	if (beanstalk.stats_tube(job_dep_tube)['current-jobs-ready'] > 0):
-		job.release()
-		if (job_dep_tube not in beanstalk.watching()): beanstalk.watch(job_dep_tube)
-		beanstalk.ignore (deps_tube)
-	else:
-		beanstalk.watch(deps_tube)
-		beanstalk.ignore(job_dep_tube)
-		if (not beanstalk.stats_tube(job_dep_tube)['current-jobs-reserved'] > 0):
-			ready_job = beanstalk.peek (job_id)
-			if (ready_job):
-				beanstalk.use (jobs_ready_tube)
-				beanstalk.put (ready_job.body)
-elif (job_tube == jobs_tube):
-	job_id = job.stats()['id']
-	job_dep_tube = dep_tube+'-'+str(job_id)
-	ndeps = add_job_deps (job, job_dep_tube)
-	if (ndeps)
-		beanstalk.use (dep_tube)
-		beanstalk.put (job_id+"\t"+job_dep_tube)
-		job.bury()
-else:
-	run_job (job)
-	tube_stats = beanstalk.stats_tube(job_tube)
-	if (not tube_stats['current-jobs-reserved'] + tube_stats['current-jobs-ready'] > 0):
-		beanstalk.watch(deps_tube)
-		beanstalk.ignore(job_tube)
-		beanstalk.use (deps_tube)
+	def run(self):
+		job = self.beanstalk.reserve()
+		job_tube = job.stats()['tube']
+		if (job_tube == deps_tube):
+			(job_id, job_dep_tube) = job.body.split("\t")
+			if (self.beanstalk.stats_tube(job_dep_tube)['current-jobs-ready'] > 0):
+				job.release()
+				if (job_dep_tube not in self.beanstalk.watching()): self.beanstalk.watch(job_dep_tube)
+				self.beanstalk.ignore (deps_tube)
+			else:
+				self.beanstalk.watch(deps_tube)
+				self.beanstalk.ignore(job_dep_tube)
+				if (not self.beanstalk.stats_tube(job_dep_tube)['current-jobs-reserved'] > 0):
+					ready_job = self.beanstalk.peek (job_id)
+					if (ready_job):
+						self.beanstalk.use (jobs_ready_tube)
+						self.beanstalk.put (ready_job.body)
+		elif (job_tube == jobs_tube):
+			job_id = job.stats()['id']
+			job_dep_tube = dep_tube+'-'+str(job_id)
+			ndeps = add_job_deps (job, job_dep_tube)
+			if (ndeps)
+				self.beanstalk.use (dep_tube)
+				self.beanstalk.put (job_id+"\t"+job_dep_tube)
+				job.bury()
+		else:
+			run_job (job)
+			tube_stats = self.beanstalk.stats_tube(job_tube)
+			if (not tube_stats['current-jobs-reserved'] + tube_stats['current-jobs-ready'] > 0):
+				self.beanstalk.watch(deps_tube)
+				self.beanstalk.ignore(job_tube)
+				self.beanstalk.use (deps_tube)
 
 
 def main():
