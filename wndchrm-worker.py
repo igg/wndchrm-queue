@@ -103,7 +103,7 @@ class DepQueue (object):
 		old_tube = self.beanstalk.using()
 	
 		self.beanstalk.use (job_dep_tube)
-		ndeps = self.add_job_deps_callback (job)
+		ndeps = self.add_job_deps_callback (job, job_dep_tube)
 		# ...
 		# beanstalk.put (dep_job)
 		# ndeps += 1
@@ -111,10 +111,12 @@ class DepQueue (object):
 		self.beanstalk.use (old_tube)
 		return ndeps
 
+
 	def run_job (self, job):
 		# ...
 		self.run_job_callback (job)
 		job.delete()
+
 
 	def run(self):
 		job = self.beanstalk.reserve()
@@ -135,13 +137,14 @@ class DepQueue (object):
 						self.beanstalk.put (ready_job.body)
 		elif (job_tube == jobs_tube):
 			job_id = job.stats()['id']
-			job_dep_tube = dep_tube+'-'+str(job_id)
+			job_dep_tube = deps_tube+'-'+str(job_id)
 			ndeps = add_job_deps (job, job_dep_tube)
 			if (ndeps)
-				self.beanstalk.use (dep_tube)
+				self.beanstalk.use (deps_tube)
 				self.beanstalk.put (job_id+"\t"+job_dep_tube)
 				job.bury()
 		else:
+			# job_tube is a job_dep_tube
 			run_job (job)
 			tube_stats = self.beanstalk.stats_tube(job_tube)
 			if (not tube_stats['current-jobs-reserved'] + tube_stats['current-jobs-ready'] > 0):
