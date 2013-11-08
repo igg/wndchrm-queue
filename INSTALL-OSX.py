@@ -146,6 +146,10 @@ def make_config():
 	ans = raw_input("Beanstalk port ["+beanstalkd_port+"] : ")
 	if (len (ans)): beanstalkd_port = ans
 
+	worker_host = get_host_fqdn()
+	ans = raw_input("Worker host (this hostname) ["+worker_host+"] : ")
+	if (len (ans)): worker_host = ans
+
 	worker_PID_dir = '/var/run/wndchrm'
 	worker_log = '/var/log/wndchrm-workers.log'
 	beanstalkd_tube = 'wndchrm'
@@ -162,6 +166,7 @@ def make_config():
 		the_file.write("num_workers           = "+str(num_workers)+"\n")
 		the_file.write("beanstalkd_host       = "+beanstalkd_host+"\n")
 		the_file.write("beanstalkd_port       = "+beanstalkd_port+"\n")
+		the_file.write("worker_host           = "+worker_host+"\n")
 		the_file.write("beanstalkd_tube       = "+beanstalkd_tube+"\n")
 		the_file.write("beanstalkd_wait_retry = "+beanstalkd_wait_retry+"\n")
 		the_file.write("beanstalkd_retries    = "+beanstalkd_retries+"\n")
@@ -193,6 +198,7 @@ def check_config():
 		'num_workers'           : None,
 		'beanstalkd_host'       : None,
 		'beanstalkd_port'       : None,
+		'worker_host'           : None,
 		'beanstalkd_tube'       : None,
 		'beanstalkd_wait_retry' : None,
 		'beanstalkd_retries'    : None,

@@ -84,6 +84,7 @@ class DepQueue (object):
 			'beanstalkd_retries'    : None,
 			'worker_PID_dir'        : None,
 			'worker_log'            : None,
+			'worker_host'           : None,
 			}
 		conf_ints = {
 			'num_workers'           : None,
