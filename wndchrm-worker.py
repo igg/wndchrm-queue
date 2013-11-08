@@ -14,6 +14,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import time # for sleep
+import datetime
 import ConfigParser
 import io
 import socket # for socket.gethostbyaddr
@@ -35,39 +36,17 @@ conf_path = '/etc/wndchrm/wndchrm-queue.conf'
 class DepQueue (object):
 	def __init__(self, run_job_callback, add_job_deps_callback):
 		self.conf = None
-		read_config (self)
+		self.read_config ()
+		
+		self.PID = os.getpid()
 
 		self.beanstalk = None
-		connect (self)
+		self.connect ()
 
 		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType
 			raise ValueError ("both run_job_callback and add_job_deps_callback must be functions")
 		self.add_job_deps_callback = add_job_deps_callback
 		self.run_job_callback = run_job_callback
-
-	def connect (self):
-		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
-		# Tube for incoming jobs with dependencies.
-		# These will be broken up and put into their own job-specific tube
-		# with the name <self.deps_tube>-<job_with_deps.id>
-		# The original job with dependencies will then be buried
-		self.jobs_tube = self.conf['beanstalkd_tube']
-		self.beanstalk.watch (self.jobs_tube)
-
-		# This tube gets jobs describing the dependencies (not the actual dependency jobs)
-		# The jobs here have the form <job_with_deps.id><tab><tube for this job's dependencies>
-		# Workers either watch this tube or a job-specific dependency tube
-		# This tube serves to alert workers of pending jobs in job-specific dependency tube
-		# Jobs are released back into this tube when they are picked up, and then this tube is ignored so that
-		# the worker now watches to the job-specific tube
-		self.deps_tube = self.conf['beanstalkd_tube']+'-deps'
-		self.beanstalk.watch (self.jobs_tube)
-
-		# When all job dependencies are satisfied, the original buried job still in the root tube
-		# is deleted, and its body is placed in the jobs-ready tube
-		self.jobs_ready_tube = self.conf['beanstalkd_tube']+'-ready'
-		self.beanstalk.watch (self.jobs_tube)
-		
 
 
 	def read_config(self):
@@ -97,6 +76,41 @@ class DepQueue (object):
 				self.conf[k] = int (config.get("conf", k))
 			else:
 				self.conf[k] = config.get("conf", k)
+
+	def write_log (self, message):
+		# We're going to ignore errors while writing to the log
+		try:
+			with open(self.conf['worker_log'], "a") as f:
+				f.write(str(datetime.datetime.now().replace(microsecond=0))+" "+
+					self.PID+'@'+self.conf['worker_host']+': '+
+					message+"\n")
+		except:
+			pass
+
+	def connect (self):
+		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
+		# Tube for incoming jobs with dependencies.
+		# These will be broken up and put into their own job-specific tube
+		# with the name <self.deps_tube>-<job_with_deps.id>
+		# The original job with dependencies will then be buried
+		self.jobs_tube = self.conf['beanstalkd_tube']
+		self.beanstalk.watch (self.jobs_tube)
+
+		# This tube gets jobs describing the dependencies (not the actual dependency jobs)
+		# The jobs here have the form <job_with_deps.id><tab><tube for this job's dependencies>
+		# Workers either watch this tube or a job-specific dependency tube
+		# This tube serves to alert workers of pending jobs in job-specific dependency tube
+		# Jobs are released back into this tube when they are picked up, and then this tube is ignored so that
+		# the worker now watches to the job-specific tube
+		self.deps_tube = self.conf['beanstalkd_tube']+'-deps'
+		self.beanstalk.watch (self.jobs_tube)
+
+		# When all job dependencies are satisfied, the original buried job still in the root tube
+		# is deleted, and its body is placed in the jobs-ready tube
+		self.jobs_ready_tube = self.conf['beanstalkd_tube']+'-ready'
+		self.beanstalk.watch (self.jobs_tube)
+	
+		self.write_log ("Watching tubes "+", ".join (self.beanstalk.watching()))
 
 
 	def add_job_deps (self, job, job_dep_tube):
@@ -164,29 +178,28 @@ def main():
 	if not has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
 		sys.exit(1)
-	
+
 	while (1):
 		try:
-			queue = dependent_queue()
+			queue = DepQueue()
 			retries = 0
 			queue.run()
 		except beanstalkc.SocketError:
-			retries += 1
-			if (retries > max_retries):
-				print_log ("Giving up after "+retries+" retries. Worker exiting.")
+			if retries >= max_retries:
+				if (queue): queue.write_log ("Giving up after "+retries+" retries. Worker exiting.")
 				sys.exit(1)
-			if queue:
-				print_log ("beanstalkd on "+beanstalkd_host+" port "+beanstalkd_port+" not responding. Retry in "+wait_retry+" seconds.")
-				queue = None
+			if retries == 0:
+				if (queue): queue.write_log ("beanstalkd on "+beanstalkd_host+" port "+beanstalkd_port+" not responding. Retry in "+wait_retry+" seconds.")
 			time.sleep(wait_retry)
-		except Exception e:
 			retries += 1
-			if (retries > max_retries):
-				print_log ("Giving up after "+retries+" retries. Worker exiting.")
+		except Exception e:
+			if (retries >= max_retries):
+				if (queue): queue.write_log ("Giving up after "+retries+" retries. Worker exiting.")
 				sys.exit(1)
-			print_log (str(e))
-			if not queue:
-				time.sleep(wait_retry)
+			if (queue): queue.write_log ('Exception: '+str(e))
+			time.sleep(wait_retry)
+			retries += 1
+
 
 
 if __name__ == "__main__":
