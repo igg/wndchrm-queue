@@ -20,6 +20,8 @@ import socket # for socket.gethostbyaddr
 import subprocess
 import sys
 import os
+import types
+
 
 has_beanstalkc = False
 try:
@@ -31,27 +33,42 @@ except:
 conf_path = '/etc/wndchrm/wndchrm-queue.conf'
 
 class DepQueue (object):
-	def __init__(self, **kwargs):
+	def __init__(self, run_job_callback, add_job_deps_callback):
 		self.conf = None
 		read_config (self)
 
 		self.beanstalk = None
 		connect (self)
 
-		self.add_job_deps_callback = None
-		if 'add_job_deps_callback' not in kwargs:
-			raise ValueError("The add_job_deps_callback must be used to specify a function to add job dependencies")
-		else:
-			self.add_job_deps_callback = kwargs['add_job_deps_callback']
-
-		self.run_job_callback = None
-		if 'run_job_callback' not in kwargs:
-			raise ValueError("The run_job_callback must be used to specify a function to run jobs")
-		else:
-			self.run_job_callback = kwargs['run_job_callback']
+		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType
+			raise ValueError ("both run_job_callback and add_job_deps_callback must be functions")
+		self.add_job_deps_callback = add_job_deps_callback
+		self.run_job_callback = run_job_callback
 
 	def connect (self):
 		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
+		# Tube for incoming jobs with dependencies.
+		# These will be broken up and put into their own job-specific tube
+		# with the name <self.deps_tube>-<job_with_deps.id>
+		# The original job with dependencies will then be buried
+		self.jobs_tube = self.conf['beanstalkd_tube']
+		self.beanstalk.watch (self.jobs_tube)
+
+		# This tube gets jobs describing the dependencies (not the actual dependency jobs)
+		# The jobs here have the form <job_with_deps.id><tab><tube for this job's dependencies>
+		# Workers either watch this tube or a job-specific dependency tube
+		# This tube serves to alert workers of pending jobs in job-specific dependency tube
+		# Jobs are released back into this tube when they are picked up, and then this tube is ignored so that
+		# the worker now watches to the job-specific tube
+		self.deps_tube = self.conf['beanstalkd_tube']+'-deps'
+		self.beanstalk.watch (self.jobs_tube)
+
+		# When all job dependencies are satisfied, the original buried job still in the root tube
+		# is deleted, and its body is placed in the jobs-ready tube
+		self.jobs_ready_tube = self.conf['beanstalkd_tube']+'-ready'
+		self.beanstalk.watch (self.jobs_tube)
+		
+
 
 	def read_config(self):
 		global conf_path
