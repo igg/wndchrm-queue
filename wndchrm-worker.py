@@ -150,17 +150,19 @@ class DepQueue (object):
 			if (not tube_stats['current-jobs-reserved'] + tube_stats['current-jobs-ready'] > 0):
 				self.beanstalk.watch(deps_tube)
 				self.beanstalk.ignore(job_tube)
+				job_id = job_tube[job_tube.rfind('-')+1:]
+				ready_job = self.beanstalk.peek (job_id)
+				if (ready_job):
+					self.beanstalk.use (jobs_ready_tube)
+					self.beanstalk.put (ready_job.body)
 				self.beanstalk.use (deps_tube)
+
 
 
 def main():
 	if not has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
 		sys.exit(1)
-watch tubes:
-	jobs
-	job-deps
-	jobs-ready
 	
 	while (1):
 		try:
