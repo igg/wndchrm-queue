@@ -56,7 +56,7 @@ def check_pip():
 	if (len(out.strip()) < 3):
 		print 'it is recommended to install the python module manager pip'
 		print 'sudo easy_install pip'
-		ans = raw_input("OK to execute above command? y or n [n] : ")
+		ans = raw_input("OK to execute above command? y or [n] : ")
 		if ans in ['y', 'Y']:
 			subprocess.call(['sudo', 'easy_install', 'pip'])
 	else:
@@ -84,7 +84,7 @@ def check_homebrew():
 	if (len(out.strip()) < 3):
 		print "On OS X, it is recommended to first install homebrew (http://brew.sh/):"
 		print 'ruby -e "$(curl -fsSL https://raw.github.com/mxcl/homebrew/go)"'
-		ans = raw_input("OK to execute above command? y or n [n] : ")
+		ans = raw_input("OK to execute above command? y or [n] : ")
 		if ans in ['y', 'Y']:
 			subprocess.call(['sh', '-c', 'ruby -e "$(curl -fsSL https://raw.github.com/mxcl/homebrew/go)"'])
 	else:
@@ -135,6 +135,7 @@ def make_config():
 
 	(out, err) = subprocess.Popen(["sysctl", "-n", "hw.physicalcpu"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 	num_workers = int (out.strip()) - 1
+	if (num_workers < 1):	num_workers = 1
 	ans = raw_input("Number of wndchrm workers ["+str(num_workers)+"] : ")
 	if (len (ans)): num_workers = int(ans)
 
@@ -183,7 +184,7 @@ def make_config():
 	print ""
 	if (beanstalkd_host == 'localhost' or beanstalkd_host == '127.0.0.1'):
 		print "Remote workers can connect to the local beanstalkd server using:"
-		print "beanstalkd_host       = "+get_host_fqdn()
+		print "beanstalkd_host       = "+worker_host
 	ans = raw_input("Change any settings in a separate editor and hit return.")
 
 
@@ -235,14 +236,14 @@ except ImportError:
 # 		print "For brew to install Python modules, it is recommended to make "+get_python_lib()+" writeable by the admin group"
 # 		print "sudo chown -R :admin "+get_python_lib()
 # 		print "sudo chmod -R g+w "+get_python_lib()
-# 		ans = raw_input("OK to execute above commands? y or n [n] : ")
+# 		ans = raw_input("OK to execute above commands? y or [n] : ")
 # 		if ans in ['y', 'Y']:
 # 			subprocess.call("sudo chown -R :admin "+get_python_lib())
 # 			subprocess.call("sudo chmod -R g+w "+get_python_lib())
 # 	print "install PyYAML on OS X using homebrew:"
 # 	print "brew tap sampsyo/py"
 # 	print "brew install PyYAML"
-# 	ans = raw_input("OK to execute above commands? y or n [n] : ")
+# 	ans = raw_input("OK to execute above commands? y or [n] : ")
 # 	if ans in ['y', 'Y']:
 # 		subprocess.call("brew tap sampsyo/py")
 # 		subprocess.call("brew install PyYAML")
@@ -251,7 +252,7 @@ except ImportError:
 	if (len(out.strip()) < 3):
 		print 'The python PyYAML module depends on libyaml'
 		print 'brew install libyaml'
-		ans = raw_input("OK to execute above command? y or n [n] : ")
+		ans = raw_input("OK to execute above command? y or [n] : ")
 		if ans in ['y', 'Y']:
 			subprocess.call(['brew', 'install', 'libyaml'])
 		else:
@@ -261,7 +262,7 @@ except ImportError:
 	check_pip()
 
 	print 'sudo pip install PyYAML'
-	ans = raw_input("OK to execute above command? y or n [n] : ")
+	ans = raw_input("OK to execute above command? y or [n] : ")
 	if ans in ['y', 'Y']:
 		subprocess.call(['sudo', 'pip', 'install', 'PyYAML'])
 		import yaml
@@ -282,7 +283,7 @@ except ImportError:
 	check_pip()
 
 	print 'sudo pip install beanstalkc'
-	ans = raw_input("OK to execute above command? y or n [n] : ")
+	ans = raw_input("OK to execute above command? y or [n] : ")
 	if ans in ['y', 'Y']:
 		subprocess.call(['sudo', 'pip', 'install', 'beanstalkc'])
 		import beanstalkc
@@ -296,13 +297,16 @@ except ImportError:
 (out, err) = subprocess.Popen(["command", "-v", "beanstalkd"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 if (len(out.strip()) < 3):
 	print "A beanstalkd server is required on the network.  Not necessarily on this machine."
-	ans = raw_input("Install beanstalkd locally? y or n [n] : ")
+	ans = raw_input("Install beanstalkd locally? y or [n] : ")
 	if ans in ['y', 'Y']:
 		subprocess.call(['brew', 'install', 'beanstalkd'])
-		ans = raw_input("Launch beanstalk automatically on login? y or n [n] : ")
-		if ans in ['y', 'Y']:
+		ans = raw_input("Launch beanstalk automatically on reboot, login, never? r or l or [n] : ")
+		if ans in ['l', 'L']:
 			subprocess.call(['sh', '-c', 'ln -sfv /usr/local/opt/beanstalk/*.plist ~/Library/LaunchAgents'])
 			subprocess.call(['sh', '-c', 'launchctl load ~/Library/LaunchAgents/homebrew.mxcl.beanstalk.plist'])
+		elif ans in ['r', 'R']:
+			subprocess.call(['sudo', 'sh', '-c', 'cp -fv /usr/local/opt/beanstalk/*.plist /Library/LaunchAgents'])
+			subprocess.call(['sudo', 'sh', '-c', 'launchctl load /Library/LaunchAgents/homebrew.mxcl.beanstalk.plist'])
 
 #
 # Check config
