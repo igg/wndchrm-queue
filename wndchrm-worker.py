@@ -41,9 +41,8 @@ class DepQueue (object):
 		self.PID = os.getpid()
 
 		self.beanstalk = None
-		self.connect ()
 
-		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType
+		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType:
 			raise ValueError ("both run_job_callback and add_job_deps_callback must be functions")
 		self.add_job_deps_callback = add_job_deps_callback
 		self.run_job_callback = run_job_callback
@@ -76,16 +75,14 @@ class DepQueue (object):
 				self.conf[k] = int (config.get("conf", k))
 			else:
 				self.conf[k] = config.get("conf", k)
+		self.max_retries = self.conf['beanstalkd_retries']
+		self.wait_retry = self.conf['beanstalkd_wait_retry']
 
 	def write_log (self, message):
-		# We're going to ignore errors while writing to the log
-		try:
-			with open(self.conf['worker_log'], "a") as f:
-				f.write(str(datetime.datetime.now().replace(microsecond=0))+" "+
-					self.PID+'@'+self.conf['worker_host']+': '+
-					message+"\n")
-		except:
-			pass
+		with open(self.conf['worker_log'], "a") as f:
+			f.write(str(datetime.datetime.now().replace(microsecond=0))+" "+
+				str(self.PID)+'@'+self.conf['worker_host']+': '+
+				message+"\n")
 
 	def connect (self):
 		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
@@ -103,12 +100,12 @@ class DepQueue (object):
 		# Jobs are released back into this tube when they are picked up, and then this tube is ignored so that
 		# the worker now watches to the job-specific tube
 		self.deps_tube = self.conf['beanstalkd_tube']+'-deps'
-		self.beanstalk.watch (self.jobs_tube)
+		self.beanstalk.watch (self.deps_tube)
 
 		# When all job dependencies are satisfied, the original buried job still in the root tube
 		# is deleted, and its body is placed in the jobs-ready tube
 		self.jobs_ready_tube = self.conf['beanstalkd_tube']+'-ready'
-		self.beanstalk.watch (self.jobs_tube)
+		self.beanstalk.watch (self.jobs_ready_tube)
 	
 		self.write_log ("Watching tubes "+", ".join (self.beanstalk.watching()))
 
@@ -154,7 +151,7 @@ class DepQueue (object):
 			job_id = job.stats()['id']
 			job_dep_tube = deps_tube+'-'+str(job_id)
 			ndeps = add_job_deps (job, job_dep_tube)
-			if (ndeps)
+			if (ndeps):
 				self.beanstalk.use (deps_tube)
 				self.beanstalk.put (job_id+"\t"+job_dep_tube)
 				job.bury()
@@ -172,6 +169,11 @@ class DepQueue (object):
 					self.beanstalk.put (ready_job.body)
 				self.beanstalk.use (deps_tube)
 
+def run_job_callback (job):
+	pass
+
+def add_job_deps_callback (job, dep_tube):
+	pass
 
 
 def main():
@@ -179,24 +181,25 @@ def main():
 		print "The beanstalkc module is required for "+sys.argv[0]
 		sys.exit(1)
 
+	retries = 0
+	max_retries = 1
+	wait_retry = 30
+	queue = None
 	while (1):
 		try:
-			queue = DepQueue()
 			retries = 0
+			queue = DepQueue (run_job_callback,add_job_deps_callback)
+			max_retries = queue.max_retries
+			wait_retry = queue.wait_retry
+			queue.connect()
 			queue.run()
 		except beanstalkc.SocketError:
 			if retries >= max_retries:
 				if (queue): queue.write_log ("Giving up after "+retries+" retries. Worker exiting.")
 				sys.exit(1)
 			if retries == 0:
-				if (queue): queue.write_log ("beanstalkd on "+beanstalkd_host+" port "+beanstalkd_port+" not responding. Retry in "+wait_retry+" seconds.")
-			time.sleep(wait_retry)
-			retries += 1
-		except Exception e:
-			if (retries >= max_retries):
-				if (queue): queue.write_log ("Giving up after "+retries+" retries. Worker exiting.")
-				sys.exit(1)
-			if (queue): queue.write_log ('Exception: '+str(e))
+				if (queue): queue.write_log ("beanstalkd on "+queue.conf['beanstalkd_host']+
+					" port "+str(queue.conf['beanstalkd_port'])+" not responding. Retry in "+str(wait_retry)+" seconds.")
 			time.sleep(wait_retry)
 			retries += 1
 
