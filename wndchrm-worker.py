@@ -22,7 +22,8 @@ import subprocess
 import sys
 import os
 import types
-
+from multiprocessing import Process
+import signal
 
 has_beanstalkc = False
 try:
@@ -33,8 +34,9 @@ except:
 
 conf_path = '/etc/wndchrm/wndchrm-queue.conf'
 
+
 class DepQueue (object):
-	def __init__(self, run_job_callback, add_job_deps_callback):
+	def __init__(self):
 		self.conf = None
 		self.read_config ()
 		
@@ -42,11 +44,8 @@ class DepQueue (object):
 
 		self.beanstalk = None
 
-		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType:
-			raise ValueError ("both run_job_callback and add_job_deps_callback must be functions")
-		self.add_job_deps_callback = add_job_deps_callback
-		self.run_job_callback = run_job_callback
-
+	def __del__(self):
+		self.write_log ("Terminating")
 
 	def read_config(self):
 		global conf_path
@@ -78,11 +77,11 @@ class DepQueue (object):
 		self.max_retries = self.conf['beanstalkd_retries']
 		self.wait_retry = self.conf['beanstalkd_wait_retry']
 
-	def write_log (self, message):
+	def write_log (self, *args):
 		with open(self.conf['worker_log'], "a") as f:
 			f.write(str(datetime.datetime.now().replace(microsecond=0))+" "+
 				str(self.PID)+'@'+self.conf['worker_host']+': '+
-				message+"\n")
+				' '.join(map(str, args))+"\n")
 
 	def connect (self):
 		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
@@ -106,14 +105,18 @@ class DepQueue (object):
 		# is deleted, and its body is placed in the jobs-ready tube
 		self.jobs_ready_tube = self.conf['beanstalkd_tube']+'-ready'
 		self.beanstalk.watch (self.jobs_ready_tube)
-	
-		self.write_log ("Watching tubes "+", ".join (self.beanstalk.watching()))
+		
+		# Might as well ignore 'default' tube
+		self.beanstalk.ignore ('default')
+
+
+		self.write_log ("Watching tubes", self.beanstalk.watching())
 
 
 	def add_job_deps (self, job, job_dep_tube):
 		ndeps = 0
 		old_tube = self.beanstalk.using()
-	
+
 		self.beanstalk.use (job_dep_tube)
 		ndeps = self.add_job_deps_callback (job, job_dep_tube)
 		# ...
@@ -130,44 +133,51 @@ class DepQueue (object):
 		job.delete()
 
 
-	def run(self):
-		job = self.beanstalk.reserve()
-		job_tube = job.stats()['tube']
-		if (job_tube == deps_tube):
-			(job_id, job_dep_tube) = job.body.split("\t")
-			if (self.beanstalk.stats_tube(job_dep_tube)['current-jobs-ready'] > 0):
-				job.release()
-				if (job_dep_tube not in self.beanstalk.watching()): self.beanstalk.watch(job_dep_tube)
-				self.beanstalk.ignore (deps_tube)
+	def run(self, run_job_callback, add_job_deps_callback):
+		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType:
+			raise ValueError ("both run_job_callback and add_job_deps_callback must be functions")
+		self.add_job_deps_callback = add_job_deps_callback
+		self.run_job_callback = run_job_callback
+
+		keepalive = True
+		while (keepalive):
+			job = self.beanstalk.reserve()
+			job_tube = job.stats()['tube']
+			if (job_tube == deps_tube):
+				(job_id, job_dep_tube) = job.body.split("\t")
+				if (self.beanstalk.stats_tube(job_dep_tube)['current-jobs-ready'] > 0):
+					job.release()
+					if (job_dep_tube not in self.beanstalk.watching()): self.beanstalk.watch(job_dep_tube)
+					self.beanstalk.ignore (deps_tube)
+				else:
+					self.beanstalk.watch(deps_tube)
+					self.beanstalk.ignore(job_dep_tube)
+					if (not self.beanstalk.stats_tube(job_dep_tube)['current-jobs-reserved'] > 0):
+						ready_job = self.beanstalk.peek (job_id)
+						if (ready_job):
+							self.beanstalk.use (jobs_ready_tube)
+							self.beanstalk.put (ready_job.body)
+			elif (job_tube == jobs_tube):
+				job_id = job.stats()['id']
+				job_dep_tube = deps_tube+'-'+str(job_id)
+				ndeps = add_job_deps (job, job_dep_tube)
+				if (ndeps):
+					self.beanstalk.use (deps_tube)
+					self.beanstalk.put (job_id+"\t"+job_dep_tube)
+					job.bury()
 			else:
-				self.beanstalk.watch(deps_tube)
-				self.beanstalk.ignore(job_dep_tube)
-				if (not self.beanstalk.stats_tube(job_dep_tube)['current-jobs-reserved'] > 0):
+				# job_tube is a job_dep_tube
+				run_job (job)
+				tube_stats = self.beanstalk.stats_tube(job_tube)
+				if (not tube_stats['current-jobs-reserved'] + tube_stats['current-jobs-ready'] > 0):
+					self.beanstalk.watch(deps_tube)
+					self.beanstalk.ignore(job_tube)
+					job_id = job_tube[job_tube.rfind('-')+1:]
 					ready_job = self.beanstalk.peek (job_id)
 					if (ready_job):
 						self.beanstalk.use (jobs_ready_tube)
 						self.beanstalk.put (ready_job.body)
-		elif (job_tube == jobs_tube):
-			job_id = job.stats()['id']
-			job_dep_tube = deps_tube+'-'+str(job_id)
-			ndeps = add_job_deps (job, job_dep_tube)
-			if (ndeps):
-				self.beanstalk.use (deps_tube)
-				self.beanstalk.put (job_id+"\t"+job_dep_tube)
-				job.bury()
-		else:
-			# job_tube is a job_dep_tube
-			run_job (job)
-			tube_stats = self.beanstalk.stats_tube(job_tube)
-			if (not tube_stats['current-jobs-reserved'] + tube_stats['current-jobs-ready'] > 0):
-				self.beanstalk.watch(deps_tube)
-				self.beanstalk.ignore(job_tube)
-				job_id = job_tube[job_tube.rfind('-')+1:]
-				ready_job = self.beanstalk.peek (job_id)
-				if (ready_job):
-					self.beanstalk.use (jobs_ready_tube)
-					self.beanstalk.put (ready_job.body)
-				self.beanstalk.use (deps_tube)
+					self.beanstalk.use (deps_tube)
 
 def run_job_callback (job):
 	pass
@@ -176,33 +186,103 @@ def add_job_deps_callback (job, dep_tube):
 	pass
 
 
+workers = {}
+terminating = False
+# signals handled by the sighandler, and reset to default in children
+signals_handled = {
+	signal.SIGTERM: 'SIGTERM', 
+	signal.SIGINT:  'SIGINT', 
+	signal.SIGCHLD: 'SIGCHLD', 
+	signal.SIGHUP:  'SIGHUP', 
+	}
+
+def work (worker_num):
+	global signals_handled
+
+	print "starting worker "+str(worker_num)
+	# set signals back to default
+	for signum in signals_handled.keys():
+		signal.signal(signum,signal.SIG_DFL)
+
+	queue = DepQueue()
+	queue.connect()
+	if worker_num == 3:
+		time.sleep(5)
+		queue.write_log ("Raising exception from worker", worker_num)
+		raise Exception (str(worker_num)+": I can't go on!")
+	elif worker_num == 2:
+		time.sleep(10)
+		queue.write_log ("Returning from worker", worker_num)
+		return
+	else:
+		queue.run (run_job_callback, add_job_deps_callback)
+
+def sighandler(signum, frame):
+	global terminating
+	global workers
+	global signals_handled
+
+	print 'Signal handler called with signal', signals_handled[signum]
+	if signum == signal.SIGINT or signum == signal.SIGTERM:
+		terminating = True
+		print "terminating workers"
+		for worker in workers:
+			workers[worker]['process'].terminate()
+			sys.exit(1)
+
+	elif signum == signal.SIGCHLD:
+		for worker in workers.keys():
+			process = workers[worker]['process']
+			if (process and not process.is_alive()):
+				print "worker", worker, "died with exitcode", process.exitcode
+				workers[worker]['process'] = None
+				if (not terminating):
+					print "restarting worker",worker
+					process = Process (target = work, args = (worker,))
+					process.start()
+					workers[worker]['process'] = process
+
+	elif signum == signal.SIGHUP:
+		print "restarting workers"
+		# They will send SIGCHLD when they terminate, which will restart them
+		# when terminate is False
+		for worker in workers:
+			workers[worker]['process'].terminate()
+
+
 def main():
+	global workers
+	global signals_handled
+	global terminating
+
 	if not has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
 		sys.exit(1)
 
-	retries = 0
-	max_retries = 1
-	wait_retry = 30
-	queue = None
-	while (1):
-		try:
-			retries = 0
-			queue = DepQueue (run_job_callback,add_job_deps_callback)
-			max_retries = queue.max_retries
-			wait_retry = queue.wait_retry
-			queue.connect()
-			queue.run()
-		except beanstalkc.SocketError:
-			if retries >= max_retries:
-				if (queue): queue.write_log ("Giving up after "+retries+" retries. Worker exiting.")
-				sys.exit(1)
-			if retries == 0:
-				if (queue): queue.write_log ("beanstalkd on "+queue.conf['beanstalkd_host']+
-					" port "+str(queue.conf['beanstalkd_port'])+" not responding. Retry in "+str(wait_retry)+" seconds.")
-			time.sleep(wait_retry)
-			retries += 1
+	queue = DepQueue()
+	num_workers = queue.conf['num_workers']
+	for i in range (1,num_workers+1):
+		worker = Process (target = work, args = (i,))
+		worker.daemon = True
+		workers[i] = {'id': i, 'process': worker}
 
+	queue.write_log ("Master starting",num_workers,"workers")
+
+	for worker in workers:
+		workers[worker]['process'].start()
+
+	# We register the signal handlers after starting workers
+	# workers have to reset their own signal handlers
+	for signum in signals_handled.keys():
+		signal.signal(signum,sighandler)
+
+
+	# Nothing to do here.
+	# Don't want to join any process, since we'd block on only one process
+	# Take nice naps.
+	while (not terminating):
+		time.sleep (100)
+	queue.write_log ("Master terminating")
 
 
 if __name__ == "__main__":
