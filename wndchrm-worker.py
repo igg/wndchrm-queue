@@ -33,10 +33,9 @@ try:
 except:
 	pass
 
-conf_path = '/etc/wndchrm/wndchrm-queue.conf'
-
-
 class DepQueue (object):
+	conf_path = '/etc/wndchrm/wndchrm-queue.conf'
+
 	def __init__(self):
 		self.conf = None
 		self.read_config ()
@@ -54,9 +53,8 @@ class DepQueue (object):
 
 
 	def read_config(self):
-		global conf_path
 		config = ConfigParser.SafeConfigParser()
-		config.readfp(io.BytesIO('[conf]\n'+open(conf_path, 'r').read()))
+		config.readfp(io.BytesIO('[conf]\n'+open(DepQueue.conf_path, 'r').read()))
 		self.conf = {
 			'wndchrm_executable'    : None,
 			'num_workers'           : None,
@@ -92,6 +90,22 @@ class DepQueue (object):
 				"\n"
 				)
 
+	def wait_connect (self):
+		first = True
+		# This will poll the server every conf['beanstalkd_wait_retry'] seconds
+		# until a connection is made
+		while (not self.beanstalk):
+			try:
+				self.connect()
+			except beanstalkc.BeanstalkcException:
+				if first:
+					self.write_log ("Cannot connect to beanstalk server on",
+						self.conf['beanstalkd_host'],'port',self.conf['beanstalkd_port'])
+					first = False
+				self.beanstalk = None
+				time.sleep (self.conf['beanstalkd_wait_retry'])
+
+
 	def connect (self):
 		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
 		# Tube for incoming jobs with dependencies.
@@ -118,8 +132,8 @@ class DepQueue (object):
 		# Might as well ignore 'default' tube
 		self.beanstalk.ignore ('default')
 
-
-		self.write_log ("Watching tubes", self.beanstalk.watching())
+		self.write_log ("Watching tubes", self.beanstalk.watching(),
+			"on",self.conf['beanstalkd_host'],'port',self.conf['beanstalkd_port'])
 
 
 	def add_job_deps (self, job, job_dep_tube):
@@ -196,108 +210,119 @@ def add_job_deps_callback (job, dep_tube):
 	pass
 
 
-workers = {}
-terminating = False
-# signals handled by the sighandler, and reset to default in children
-signals_handled = {
-	signal.SIGTERM: 'SIGTERM', 
-	signal.SIGINT:  'SIGINT', 
-	signal.SIGCHLD: 'SIGCHLD', 
-	signal.SIGHUP:  'SIGHUP', 
-	}
 
-def work (worker_name):
-	global signals_handled
+class MainScope (object):
+	# signals handled by the sighandler, and reset to default in children
+	signals_handled = {
+		signal.SIGTERM: 'SIGTERM', 
+		signal.SIGINT:  'SIGINT', 
+		signal.SIGCHLD: 'SIGCHLD', 
+		signal.SIGHUP:  'SIGHUP', 
+		}
+	terminating = False
 
-	# set signals back to default
-	for signum in signals_handled.keys():
-		signal.signal(signum,signal.SIG_DFL)
+	def __init__(self):
+		self.queue = DepQueue()
+		self.workers = {}
 
-	queue = DepQueue()
-	queue.write_log ("Starting worker", worker_name)
-	queue.connect()
-	try:
-		if worker_name.endswith('3'):
-			time.sleep(5)
-			queue.write_log ("Raising exception from worker", worker_name)
-			raise Exception (worker_name+": I can't go on!")
-		elif worker_name.endswith('2'):
-			time.sleep(10)
-			queue.write_log ("Returning from worker", worker_name)
-			return
-		else:
-			queue.run (run_job_callback, add_job_deps_callback)
-	except Exception as e:
-		queue.write_log ("Exception: ", e)
-		sys.exit(1)
+	def __del__(self):
+		self.queue.write_log ("Main terminating")
+	
+	def launch_workers (self):
+		num_workers = self.queue.conf['num_workers']
+		for i in range (1,num_workers+1):
+			worker_name = 'W'+str(i).zfill(len(str(num_workers)))
+			worker = Process (target = self.work, name = worker_name, args = (worker_name,))
+			# FIXME: make it a daemon?
+			worker.daemon = False
+			self.workers[worker_name] = {'name': worker_name, 'process': worker}
 
-def sighandler(signum, frame):
-	global terminating
-	global workers
-	global signals_handled
+		self.queue.write_log ("Main starting",num_workers,"workers")
 
-	print 'Signal handler called with signal', signals_handled[signum]
-	if signum == signal.SIGINT or signum == signal.SIGTERM:
-		terminating = True
-		print "terminating workers"
-		for worker in workers:
-			workers[worker]['process'].terminate()
+		for worker in self.workers:
+			self.workers[worker]['process'].start()
 
-	elif signum == signal.SIGCHLD:
-		for worker in workers.keys():
-			process = workers[worker]['process']
-			w_name = workers[worker]['name']
-			if (process and not process.is_alive()):
-				print "worker", w_name, "died with exitcode", process.exitcode
-				workers[worker]['process'] = None
-				if (not terminating):
-					print "restarting worker",w_name
-					process = Process (target = work, name = w_name, args = (w_name,))
-					process.start()
-					workers[worker]['process'] = process
+	def work (self, worker_name):
+		# subprocess entry point
+		#
+		# set signals back to default
+		for signum in MainScope.signals_handled.keys():
+			signal.signal(signum,signal.SIG_DFL)
 
-	elif signum == signal.SIGHUP:
-		print "restarting workers"
-		# They will send SIGCHLD when they terminate, which will restart them
-		# when terminate is False
-		for worker in workers:
-			workers[worker]['process'].terminate()
+		# and make our own queue
+		queue = DepQueue()
+		queue.write_log ("Starting worker", worker_name)
+
+		try:
+			queue.wait_connect()
+			if worker_name.endswith('3'):
+				time.sleep(5)
+				queue.write_log ("Raising exception from worker", worker_name)
+				raise Exception (worker_name+": I can't go on!")
+			elif worker_name.endswith('2'):
+				time.sleep(10)
+				queue.write_log ("Returning from worker", worker_name)
+				return
+			else:
+				queue.run (run_job_callback, add_job_deps_callback)
+		except beanstalkc.SocketError:
+			queue.write_log ("Lost connection to beanstalk server on", self.conf['beanstalkd_host'],'port',self.conf['beanstalkd_port'])
+			sys.exit(1)
+		except Exception as e:
+			queue.write_log ("Exception: ", e)
+			sys.exit(1)
+
+
+	def sighandler(self, signum, frame):
+		print 'Signal handler called with signal', MainScope.signals_handled[signum]
+		workers = self.workers
+		if signum == signal.SIGINT or signum == signal.SIGTERM:
+			MainScope.terminating = True
+			print "terminating workers"
+			for worker in workers:
+				workers[worker]['process'].terminate()
+
+		elif signum == signal.SIGCHLD:
+			for worker in workers.keys():
+				process = workers[worker]['process']
+				w_name = workers[worker]['name']
+				if (process and not process.is_alive()):
+					print "worker", w_name, "died with exitcode", process.exitcode
+					workers[worker]['process'] = None
+					if (not MainScope.terminating):
+						print "restarting worker",w_name
+						process = Process (target = self.work, name = w_name, args = (w_name,))
+						process.start()
+						workers[worker]['process'] = process
+
+		elif signum == signal.SIGHUP:
+			print "restarting workers"
+			# They will send SIGCHLD when they terminate, which will restart them
+			# when terminate is False
+			for worker in workers:
+				workers[worker]['process'].terminate()
 
 
 def main():
-	global workers
-	global signals_handled
-	global terminating
-
 	if not has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
 		sys.exit(1)
 
-	queue = DepQueue()
-	num_workers = queue.conf['num_workers']
-	for i in range (1,num_workers+1):
-		worker_name = 'W'+str(i).zfill(len(str(num_workers)))
-		worker = Process (target = work, name = worker_name, args = (worker_name,))
-		worker.daemon = True
-		workers[worker_name] = {'name': worker_name, 'process': worker}
-
-	queue.write_log ("Main starting",num_workers,"workers")
-
-	for worker in workers:
-		workers[worker]['process'].start()
+	
+	main_scope = MainScope()
+	main_scope.launch_workers()
 
 	# We register the signal handlers after starting workers
 	# workers have to reset their own signal handlers
-	for signum in signals_handled.keys():
-		signal.signal(signum,sighandler)
+	for signum in MainScope.signals_handled.keys():
+		signal.signal(signum,main_scope.sighandler)
 
 
 	# Nothing to do here.
 	# Don't want to join any process, since we'd block on only one process
 	# Take nice naps.
-	while (not terminating):
+	while (not MainScope.terminating):
 		time.sleep (100)
-	queue.write_log ("Main terminating")
 
 
 if __name__ == "__main__":
