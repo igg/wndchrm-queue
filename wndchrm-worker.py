@@ -22,6 +22,7 @@ import subprocess
 import sys
 import os
 import types
+import multiprocessing
 from multiprocessing import Process
 import signal
 
@@ -39,13 +40,18 @@ class DepQueue (object):
 	def __init__(self):
 		self.conf = None
 		self.read_config ()
-		
-		self.PID = os.getpid()
 
 		self.beanstalk = None
 
-	def __del__(self):
-		self.write_log ("Terminating")
+		self.process_name = ''
+		if 'main' not in multiprocessing.current_process().name.lower():
+			self.process_name += multiprocessing.current_process().name
+		else:
+			self.process_name += 'Main'
+
+		self.process_name += '['+str(multiprocessing.current_process().pid)+']'
+		self.process_name += '@'+self.conf['worker_host']+':'
+
 
 	def read_config(self):
 		global conf_path
@@ -79,9 +85,12 @@ class DepQueue (object):
 
 	def write_log (self, *args):
 		with open(self.conf['worker_log'], "a") as f:
-			f.write(str(datetime.datetime.now().replace(microsecond=0))+" "+
-				str(self.PID)+'@'+self.conf['worker_host']+': '+
-				' '.join(map(str, args))+"\n")
+			f.write(
+				str(datetime.datetime.now().replace(microsecond=0))+' '+
+				self.process_name+' '+
+				' '.join (map(str,args))+
+				"\n"
+				)
 
 	def connect (self):
 		self.beanstalk = beanstalkc.Connection(host=self.conf['beanstalkd_host'], port=self.conf['beanstalkd_port'])
@@ -179,6 +188,7 @@ class DepQueue (object):
 						self.beanstalk.put (ready_job.body)
 					self.beanstalk.use (deps_tube)
 
+
 def run_job_callback (job):
 	pass
 
@@ -196,26 +206,30 @@ signals_handled = {
 	signal.SIGHUP:  'SIGHUP', 
 	}
 
-def work (worker_num):
+def work (worker_name):
 	global signals_handled
 
-	print "starting worker "+str(worker_num)
 	# set signals back to default
 	for signum in signals_handled.keys():
 		signal.signal(signum,signal.SIG_DFL)
 
 	queue = DepQueue()
+	queue.write_log ("Starting worker", worker_name)
 	queue.connect()
-	if worker_num == 3:
-		time.sleep(5)
-		queue.write_log ("Raising exception from worker", worker_num)
-		raise Exception (str(worker_num)+": I can't go on!")
-	elif worker_num == 2:
-		time.sleep(10)
-		queue.write_log ("Returning from worker", worker_num)
-		return
-	else:
-		queue.run (run_job_callback, add_job_deps_callback)
+	try:
+		if worker_name.endswith('3'):
+			time.sleep(5)
+			queue.write_log ("Raising exception from worker", worker_name)
+			raise Exception (worker_name+": I can't go on!")
+		elif worker_name.endswith('2'):
+			time.sleep(10)
+			queue.write_log ("Returning from worker", worker_name)
+			return
+		else:
+			queue.run (run_job_callback, add_job_deps_callback)
+	except Exception as e:
+		queue.write_log ("Exception: ", e)
+		sys.exit(1)
 
 def sighandler(signum, frame):
 	global terminating
@@ -228,17 +242,17 @@ def sighandler(signum, frame):
 		print "terminating workers"
 		for worker in workers:
 			workers[worker]['process'].terminate()
-			sys.exit(1)
 
 	elif signum == signal.SIGCHLD:
 		for worker in workers.keys():
 			process = workers[worker]['process']
+			w_name = workers[worker]['name']
 			if (process and not process.is_alive()):
-				print "worker", worker, "died with exitcode", process.exitcode
+				print "worker", w_name, "died with exitcode", process.exitcode
 				workers[worker]['process'] = None
 				if (not terminating):
-					print "restarting worker",worker
-					process = Process (target = work, args = (worker,))
+					print "restarting worker",w_name
+					process = Process (target = work, name = w_name, args = (w_name,))
 					process.start()
 					workers[worker]['process'] = process
 
@@ -262,11 +276,12 @@ def main():
 	queue = DepQueue()
 	num_workers = queue.conf['num_workers']
 	for i in range (1,num_workers+1):
-		worker = Process (target = work, args = (i,))
+		worker_name = 'W'+str(i).zfill(len(str(num_workers)))
+		worker = Process (target = work, name = worker_name, args = (worker_name,))
 		worker.daemon = True
-		workers[i] = {'id': i, 'process': worker}
+		workers[worker_name] = {'name': worker_name, 'process': worker}
 
-	queue.write_log ("Master starting",num_workers,"workers")
+	queue.write_log ("Main starting",num_workers,"workers")
 
 	for worker in workers:
 		workers[worker]['process'].start()
@@ -282,7 +297,7 @@ def main():
 	# Take nice naps.
 	while (not terminating):
 		time.sleep (100)
-	queue.write_log ("Master terminating")
+	queue.write_log ("Main terminating")
 
 
 if __name__ == "__main__":
