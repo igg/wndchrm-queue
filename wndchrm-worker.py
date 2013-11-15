@@ -97,6 +97,7 @@ class DepQueue (object):
 		while (not self.beanstalk):
 			try:
 				self.connect()
+				first = True
 			except beanstalkc.BeanstalkcException:
 				if first:
 					self.write_log ("Cannot connect to beanstalk server on",
@@ -140,19 +141,21 @@ class DepQueue (object):
 		ndeps = 0
 		old_tube = self.beanstalk.using()
 
-		self.beanstalk.use (job_dep_tube)
-		ndeps = self.add_job_deps_callback (job, job_dep_tube)
-		# ...
-		# beanstalk.put (dep_job)
-		# ndeps += 1
-		# ...
-		self.beanstalk.use (old_tube)
+		ndeps = self.add_job_deps_callback (self, job, job_dep_tube)
+			# ...
+			# beanstalk.put (dep_job)
+			# ndeps += 1
+			# ...
 		return ndeps
 
+	def add_dependent_job (self, job_dep_tube, body):
+		self.beanstalk.use (job_dep_tube)
+		self.beanstalk.put (body)
+				
 
 	def run_job (self, job):
 		# ...
-		self.run_job_callback (job)
+		self.run_job_callback (self, job)
 		job.delete()
 
 
@@ -203,15 +206,10 @@ class DepQueue (object):
 					self.beanstalk.use (deps_tube)
 
 
-def run_job_callback (job):
-	pass
 
-def add_job_deps_callback (job, dep_tube):
-	pass
-
-
-
-class MainScope (object):
+# A class for main to use to maintain some scope without globals
+# Intent is to have one of these per worker pool on a given server.
+class QueueMain (object):
 	# signals handled by the sighandler, and reset to default in children
 	signals_handled = {
 		signal.SIGTERM: 'SIGTERM', 
@@ -246,7 +244,7 @@ class MainScope (object):
 		# subprocess entry point
 		#
 		# set signals back to default
-		for signum in MainScope.signals_handled.keys():
+		for signum in QueueMain.signals_handled.keys():
 			signal.signal(signum,signal.SIG_DFL)
 
 		# and make our own queue
@@ -274,10 +272,10 @@ class MainScope (object):
 
 
 	def sighandler(self, signum, frame):
-		print 'Signal handler called with signal', MainScope.signals_handled[signum]
+		print 'Signal handler called with signal', QueueMain.signals_handled[signum]
 		workers = self.workers
 		if signum == signal.SIGINT or signum == signal.SIGTERM:
-			MainScope.terminating = True
+			QueueMain.terminating = True
 			print "terminating workers"
 			for worker in workers:
 				workers[worker]['process'].terminate()
@@ -289,7 +287,7 @@ class MainScope (object):
 				if (process and not process.is_alive()):
 					print "worker", w_name, "died with exitcode", process.exitcode
 					workers[worker]['process'] = None
-					if (not MainScope.terminating):
+					if (not QueueMain.terminating):
 						print "restarting worker",w_name
 						process = Process (target = self.work, name = w_name, args = (w_name,))
 						process.start()
@@ -299,29 +297,74 @@ class MainScope (object):
 			print "restarting workers"
 			# They will send SIGCHLD when they terminate, which will restart them
 			# when terminate is False
+			# Main should re-read the config as well...
 			for worker in workers:
 				workers[worker]['process'].terminate()
 
+
+
+def get_wndchrm_command (job_body):
+	# a Job body may begin with the key word "wndchrm" followed by "train", "test", "classify".
+	# if the job body begins with wndchrm and has at least two other parameters, return
+	# 'wndchrm', sub-command, params tuple.
+	# If not, return a (None, None, job_body) tuple.
+
+	jobRE = re.compile ('^\s*(wndchrm)\s+(\S+)\s+(.+)$')
+	jobREres = jobRE.search (job.body)
+	if (jobREres):
+		return (jobREres.groups())
+	else:
+		return (None, None, job_body)
+
+def run_job_callback (queue, job):
+	# This job has already been looked at by add_job_deps_callback, which generated more sub-jobs
+	# So, this particular job is ready to execute as is.
+	(cmd, sub_cmd, params) = get_wndchrm_command (job.body)
+	if cmd:
+		# We probably need the shell to parse the params
+		(out, err) = subprocess.Popen(["sh", "-c", queue.conf['wndchrm_executable']+' '+sub_cmd+' '+params],
+			stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+
+
+def add_job_deps_callback (queue, job, dep_tube):
+	# This job has just entered the job queue, so we have to see if it can be broken into sub-jobs
+	# The breaking into subjobs is all that we do here - we do not "run" anything.
+	# The number of subjobs the main job can be broken into is returned
+	# If there are no subjobs, then 0 is returned.
+	# maybe this should be a generator returning job bodies?
+	#   Do generators end in None, an exception, some other way?
+	# Either way isolate this from direct beanstalkc calls.
+	# use queue.add_dependent_job (dep_tube, job, body) for now.
+
+	(cmd, sub_cmd, params) = get_wndchrm_command (job.body)
+	if cmd:
+		# We probably need the shell to parse the params
+		# wndchrm commands that are not 'check' are turned into check commands.
+		# We probably need the shell to parse the params
+		if sub_cmd not == 'check':
+			(out, err) = subprocess.Popen(["sh", "-c", queue.conf['wndchrm_executable']+' check '+params],
+				stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+		# how to do this one line at a time?
 
 def main():
 	if not has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
 		sys.exit(1)
 
-	
-	main_scope = MainScope()
+
+	main_scope = QueueMain()
 	main_scope.launch_workers()
 
 	# We register the signal handlers after starting workers
 	# workers have to reset their own signal handlers
-	for signum in MainScope.signals_handled.keys():
+	for signum in QueueMain.signals_handled.keys():
 		signal.signal(signum,main_scope.sighandler)
 
 
 	# Nothing to do here.
 	# Don't want to join any process, since we'd block on only one process
 	# Take nice naps.
-	while (not MainScope.terminating):
+	while (not QueueMain.terminating):
 		time.sleep (100)
 
 
