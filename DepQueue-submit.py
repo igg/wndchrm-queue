@@ -58,7 +58,6 @@ def main():
 		print "Jobs left:      ",queue.jobs_left
 		for job_id, job_info in queue.job_stats.items():
 			print "    ID:", job_id, "working: ", job_info['working_workers'], "idle: ", job_info['idle_workers'], "deps: ", job_info['n_deps'], "left: ", job_info['n_deps_left']
-
 		print "-------------------------"
 		time.sleep (10)
 if __name__ == "__main__":
