@@ -204,13 +204,13 @@ class DepQueue (object):
 				# ...
 		return ndeps
 
-	def add_dependent_job (self, job_dep_tube, body):
+	def add_dependent_job (self, job_dep_tube, job_params):
 		self.beanstalk.use (job_dep_tube)
-		self.beanstalk.put (body, ttr = DepQueue.job_time)
+		self.beanstalk.put ("\t".join(job_params), ttr = DepQueue.job_time)
 
-	def add_job (self, body):
+	def add_job (self, job_params):
 		self.beanstalk.use (self.jobs_tube)
-		self.beanstalk.put (body, ttr = DepQueue.job_time)
+		self.beanstalk.put ("\t".join(job_params), ttr = DepQueue.job_time)
 				
 	def run_job (self, job):
 		job_params = job.body.split ("\t")

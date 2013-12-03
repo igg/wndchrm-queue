@@ -78,7 +78,7 @@ def add_job_deps_callback (queue, dep_tube, job_id, job_params):
 			dep_job[input_idx] = file_path
 			if os.path.isfile(file_path):
 				print "Adding dependent job",dep_job
-				queue.add_dependent_job (dep_tube, "\t".join(dep_job))
+				queue.add_dependent_job (dep_tube, dep_job)
 				n_deps += 1
 			else:
 				print "Ignoring",file_path

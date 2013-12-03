@@ -46,7 +46,7 @@ def main():
 
 	if len(params) > 1:
 		print "Adding job:"," ".join (params)
-		queue.add_job ("\t".join (params))
+		queue.add_job (params)
 
 	while True:
 		queue.get_stats()
