@@ -408,6 +408,11 @@ class QueueMain (object):
 		for worker in self.workers:
 			self.workers[worker]['process'].start()
 
+		# We register the signal handlers after starting workers
+		# workers have to reset their own signal handlers
+		for signum in QueueMain.signals_handled.keys():
+			signal.signal(signum,self.sighandler)
+
 	def work (self, worker_name):
 		# subprocess entry point
 		#

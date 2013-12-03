@@ -94,11 +94,6 @@ def main():
 	main_scope = QueueMain(run_job_callback, add_job_deps_callback)
 	main_scope.launch_workers()
 
-	# We register the signal handlers after starting workers
-	# workers have to reset their own signal handlers
-	for signum in QueueMain.signals_handled.keys():
-		signal.signal(signum,main_scope.sighandler)
-
 	# Nothing to do here.
 	# Don't want to join any process, since we'd block on only one process
 	# Take nice naps.

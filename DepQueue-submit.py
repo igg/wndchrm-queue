@@ -18,7 +18,7 @@ import datetime
 import time # for sleep
 import sys
 
-# all the args constitute a wndchrm job
+# all the args constitute a "main" job
 def main():
 	if not DepQueue.has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
