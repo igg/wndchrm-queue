@@ -128,11 +128,6 @@ conf_path = '/etc/wndchrm/wndchrm-queue.conf'
 def make_config():
 	global conf_path
 
-	(out, err) = subprocess.Popen(["command", "-v", "wndchrm"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-	wndchrm_executable = out.strip()
-	ans = raw_input("wndchrm executable ["+wndchrm_executable+"] : ")
-	if (len (ans)): wndchrm_executable = ans
-
 	(out, err) = subprocess.Popen(["sysctl", "-n", "hw.physicalcpu"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 	num_workers = int (out.strip()) - 1
 	if (num_workers < 1):	num_workers = 1
@@ -163,7 +158,6 @@ def make_config():
 		subprocess.call(['sudo', 'mkdir', '-p', conf_dir])
 	tmp_file = '/tmp/'+conf_file
 	with open(tmp_file, 'w') as the_file:
-		the_file.write("wndchrm_executable    = "+wndchrm_executable+"\n")
 		the_file.write("num_workers           = "+str(num_workers)+"\n")
 		the_file.write("beanstalkd_host       = "+beanstalkd_host+"\n")
 		the_file.write("beanstalkd_port       = "+beanstalkd_port+"\n")
@@ -195,7 +189,6 @@ def check_config():
 	config = ConfigParser.SafeConfigParser()
 	config.readfp(io.BytesIO('[conf]\n'+open(conf_path, 'r').read()))
 	conf = {
-		'wndchrm_executable'    : None,
 		'num_workers'           : None,
 		'beanstalkd_host'       : None,
 		'beanstalkd_port'       : None,
