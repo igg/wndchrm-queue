@@ -18,7 +18,8 @@ import datetime
 import time # for sleep
 import sys
 
-# all the args constitute a "main" job
+# all the args excluding this executable constitute a "main" job
+# without args, just monitors the queue
 def main():
 	if not DepQueue.has_beanstalkc:
 		print "The beanstalkc module is required for "+sys.argv[0]
@@ -26,7 +27,7 @@ def main():
 
 	queue = DepQueue()
 	queue.connect()
-	
+
 	params = []
 	if len (sys.argv) < 2:
 		print "No jobs specified"

@@ -22,8 +22,6 @@ import sys
 import os
 
 
-# job bodies are a always a tab-delimited list.
-# The initial job submission must ensure that shell-parsed parameters end up as a tab-delimited list
 def is_wndchrm_command (command):
 	# looks for "wndchrm" after the last '/'
 	if command[command.rfind("/")+1:] == "wndchrm":
@@ -35,7 +33,6 @@ def run_job_callback (queue, job_id, job_params):
 	# This job has already been looked at by add_job_deps_callback, which generated more sub-jobs
 	# So, this particular job is ready to execute as is.
 	#
-	# job bodies are always tab-delimited lists, preserving the initial shell interpretation of the parameters
 	print "in run_job_callback, job",job_id,":",job_params
 	if is_wndchrm_command (job_params[0]):
 		(out, err) = subprocess.Popen(job_params, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
@@ -47,12 +44,8 @@ def add_job_deps_callback (queue, dep_tube, job_id, job_params):
 	n_deps = 0
 	# This job has just entered the job queue, so we have to see if it can be broken into sub-jobs
 	# The breaking into subjobs is all that we do here - we do not "run" anything in addition to that.
-	# The number of subjobs the main job can be broken into is returned
-	# If there are no subjobs, then 0 is returned.
-	# maybe this should be a generator returning job bodies?
-	#   Do generators end in None, an exception, some other way?
-	# Either way isolate this from direct beanstalkc calls.
-	# use queue.add_dependent_job (dep_tube, job, body) for now.
+	# The number of subjobs the main job can be broken into is returned (or 0)
+	# use queue.add_dependent_job (dep_tube, job, job_params) to add dependencies to the queue
 
 	# wndchrm commands that are not 'check' are turned into check commands.
 	if is_wndchrm_command (job_params[0]) and len (job_params) > 2 and not job_params[1] == 'check':

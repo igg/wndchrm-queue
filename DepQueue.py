@@ -166,8 +166,9 @@ class DepQueue (object):
 		# Store the default tubes
 		self.standard_tubes = []
 
-		# Tube for incoming jobs with dependencies.
-		# These will be broken up and put into their own job-specific tube
+		# Tube for incoming jobs with (or without) dependencies.
+		# The add_job_deps_callback will be called on this job to find dependencies
+		# Dependencies will be broken up and put into their own job-specific tube
 		# with the name <self.deps_tube>-<job_with_deps.id>
 		# The original job with dependencies will then be buried
 		self.jobs_tube = self.conf['beanstalkd_tube']
@@ -176,7 +177,7 @@ class DepQueue (object):
 		# This tube gets jobs describing the dependencies (not the actual dependency jobs)
 		# The jobs here have the form <job_with_deps.id><tab><tube for this job's dependencies>
 		# Workers either watch this tube or a job-specific dependency tube
-		# This tube serves to alert workers of pending jobs in job-specific dependency tube
+		# This tube serves to alert workers of pending jobs in job-specific dependency tubes
 		# Jobs are released back into this tube when they are picked up, and then this tube is ignored so that
 		# the worker now watches the job-specific tube
 		self.deps_tube = self.conf['beanstalkd_tube']+'-deps'
@@ -190,6 +191,8 @@ class DepQueue (object):
 		# We're not watching anything other than the default tube yet.
 
 
+	# This gets called internally to add any dependencies for the job
+	# This in turn calls the external add_job_deps_callback to add the dependencies.
 	def add_job_deps (self, job, job_dep_tube):
 		ndeps = 0
 		old_tube = self.beanstalk.using()
@@ -204,6 +207,9 @@ class DepQueue (object):
 				# ...
 		return ndeps
 
+	# job bodies are always tab-delimited lists, preserving the initial shell interpretation of any CLI parameters for jobs
+	# This way, as long as there are no tab characters in the interpreted command-line, we can safely store sys.argv[]
+	# as a tab-delimited list in the job body, and use lists in the API for submitting jobs and for specifying them to call-backs.
 	def add_dependent_job (self, job_dep_tube, job_params):
 		self.beanstalk.use (job_dep_tube)
 		self.beanstalk.put ("\t".join(job_params), ttr = DepQueue.job_time)
@@ -220,7 +226,6 @@ class DepQueue (object):
 			self.run_job_callback (self, job_id, job_params)
 			print "finished running",job.jid,"- deleting"
 		job.delete()
-
 
 	def run(self, run_job_callback, add_job_deps_callback):
 		if not type(run_job_callback) == types.FunctionType or not type(add_job_deps_callback) == types.FunctionType:
@@ -270,7 +275,7 @@ class DepQueue (object):
 					self.beanstalk.use (deps_tube)
 					self.beanstalk.put (str(job_id)+"\t"+job_dep_tube, ttr = DepQueue.job_time)
 					job.bury()
-					print "submitted job id",job_id,job.body,"added",ndeps,"dependencies"
+					print "submitted job id",job_id,job.body.split("\t"),"added",ndeps,"dependencies"
 				else:
 					self.beanstalk.use (jobs_ready_tube)
 					self.beanstalk.put (job.body, ttr = DepQueue.job_time)
@@ -305,6 +310,8 @@ class DepQueue (object):
 							self.beanstalk.use (jobs_ready_tube)
 							self.beanstalk.put (job_body, ttr = DepQueue.job_time)
 
+		# we only get here when keepalive becomes false
+		# which for now, it never does.
 		# ignore our tubes when cleaning up
 		for tube in self.standard_tubes:
 			self.beanstalk.ignore (tube)
