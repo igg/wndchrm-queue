@@ -54,7 +54,9 @@ class DepQueue (object):
 		self.process_name += '@'+self.conf['worker_host']+':'
 
 
-	def read_config(self):
+	def read_config(self, use_argv_conf = True):
+		if use_argv_conf:
+			DepQueue.get_argv_conf()
 		config = ConfigParser.SafeConfigParser()
 		config.readfp(io.BytesIO('[conf]\n'+open(DepQueue.conf_path, 'r').read()))
 		self.conf = {
@@ -357,7 +359,21 @@ class DepQueue (object):
 		for tube in self.beanstalk.tubes():
 			if tube not in self.standard_tubes:
 				self.beanstalk.ignore(tube)
-
+	
+	@classmethod
+	def get_argv_conf (cls):
+		"""
+		Convenience method to determine location of configuration file from argv using the -f flag
+		"""
+		import sys
+		path = DepQueue.conf_path
+		try:
+			idx = sys.argv.index('-f')
+			path = sys.argv[idx+1]
+			if path and os.path.isfile (path):
+				DepQueue.conf_path = path
+		except (ValueError,IndexError):
+			pass
 
 	# Convenience method to return absolute path of provided program
 	@staticmethod
@@ -392,7 +408,12 @@ class QueueMain (object):
 	terminating = False
 	fatal_exit = 3
 
-	def __init__(self, run_job_callback, add_job_deps_callback):
+	def __init__(self, run_job_callback, add_job_deps_callback, parse_conf_arg=True):
+		"""
+		The run_job_callback and add_job_deps_callback arguments are required.
+		The parse_conf_arg parameter (default True) determins if command-line arguments will be parsed
+		for the -f flag to determine the location of the config file (default '/etc/wndchrm/wndchrm-queue.conf').
+		"""
 		self.queue = DepQueue()
 		self.workers = {}
 		self.run_job_callback = run_job_callback
