@@ -28,20 +28,28 @@ def main():
 	queue = DepQueue()
 	queue.connect()
 
-	params = []
-	if len (sys.argv) < 2:
+	param_idx = 1
+	# If the first parameter starts with '-', the job arguments follow the -c flag
+	try:
+		if sys.argv[1].startswith('-'):
+			param_idx = sys.argv.index('-c') + 1
+	except (ValueError,IndexError):
+		pass
+
+	params = sys.argv[param_idx:]
+	
+	if len (params) < 1:
 		print "No jobs specified"
 	else:
-		params = sys.argv[1:]
-		params[0] = DepQueue.which(sys.argv[1])
+		params[0] = DepQueue.which(params[0])
 
 	if len (params) > 0 and params[0] is None:
-		print "First parameter","'"+sys.argv[1]+"'","is not an executable file."
+		print "First parameter","'"+params[0]+"'","is not an executable file."
 		print "exiting..."
 		sys.exit(0)
 
 	if len(params) == 1:
-		print "No parameters specified for",sys.argv[1]
+		print "No parameters specified for",params[0]
 		print "exiting..."
 		sys.exit(0)
 
