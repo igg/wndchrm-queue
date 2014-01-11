@@ -364,16 +364,21 @@ class DepQueue (object):
 	def get_argv_conf (cls):
 		"""
 		Convenience method to determine location of configuration file from argv using the -f flag
+		Returns an arglist with the -f argument stripped out if found, or as-is if not.
 		"""
 		import sys
 		path = DepQueue.conf_path
+		arglist = sys.argv
 		try:
-			idx = sys.argv.index('-f')
-			path = sys.argv[idx+1]
-			if path and os.path.isfile (path):
+			idx = arglist.index('-f')
+			path = arglist[idx+1]
+			if path:
 				DepQueue.conf_path = path
+				arglist.remove(idx)
+				arglist.remove(idx+1)
 		except (ValueError,IndexError):
 			pass
+		return arglist
 
 	# Convenience method to return absolute path of provided program
 	@staticmethod
